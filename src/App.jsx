@@ -47,6 +47,44 @@ function isQuotaError(message = '') {
   return msg.includes('quota') || msg.includes('limit: 0') || msg.includes('429');
 }
 
+function isTrafficError(message = '') {
+  const msg = message.toLowerCase();
+  return (
+    msg.includes('high traffic') ||
+    msg.includes('overloaded') ||
+    msg.includes('unavailable') ||
+    msg.includes('try again') ||
+    msg.includes('capacity') ||
+    msg.includes('resource_exhausted')
+  );
+}
+
+function compressImage(base64) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const MAX = 1024;
+      let { width, height } = img;
+      if (width > MAX || height > MAX) {
+        if (width > height) {
+          height = Math.round(height * (MAX / width));
+          width = MAX;
+        } else {
+          width = Math.round(width * (MAX / height));
+          height = MAX;
+        }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL('image/jpeg', 0.82).split(',')[1]);
+    };
+    img.onerror = () => reject(new Error('Failed to process image'));
+    img.src = `data:image/jpeg;base64,${base64}`;
+  });
+}
+
 export default function App() {
   const [stream, setStream] = useState(null);
   const [cameraOn, setCameraOn] = useState(false);
@@ -142,21 +180,21 @@ export default function App() {
 
   const analyzeImage = async () => {
     const activeKey = customApiKey || GEMINI_API_KEY;
-    const base64Image = captureImage();
-    if (!base64Image) return;
+    const rawImage = captureImage();
+    if (!rawImage) return;
 
     setLoading(true);
     setNutrition(null);
 
     try {
+      const base64Image = await compressImage(rawImage);
       let result;
 
       if (!import.meta.env.DEV) {
         try {
           result = await callGeminiProxy(base64Image, ANALYSIS_PROMPT);
         } catch (proxyErr) {
-          // Only fall back to client API for server/config errors, not quota limits
-          if (!activeKey || isQuotaError(proxyErr.message) || proxyErr.status === 429) {
+          if (!activeKey || isQuotaError(proxyErr.message) || isTrafficError(proxyErr.message) || proxyErr.status === 429) {
             throw proxyErr;
           }
           console.warn('Proxy unavailable, using client API:', proxyErr.message);
@@ -173,7 +211,16 @@ export default function App() {
     } catch (err) {
       console.error('API error:', err);
       const message = err.message || 'Unknown error';
-      if (isQuotaError(message)) {
+      if (isTrafficError(message)) {
+        alert(
+          'Gemini servers are busy right now.\n\n' +
+          'The app already retried multiple models automatically. Please:\n' +
+          '1. Wait 30–60 seconds and try again\n' +
+          '2. Use a fresh API key from https://aistudio.google.com/apikey\n' +
+          '3. Avoid clicking Analyze repeatedly (that makes it worse)\n\n' +
+          `Details: ${message.slice(0, 180)}`
+        );
+      } else if (isQuotaError(message)) {
         alert(
           'Gemini API quota exceeded.\n\n' +
           'Try these fixes:\n' +

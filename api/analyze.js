@@ -30,7 +30,10 @@ export default async function handler(req, res) {
     return res.status(200).json({ text });
   } catch (err) {
     const message = err.message || 'Failed to reach Gemini API';
-    const isQuota = message.toLowerCase().includes('quota') || message.includes('limit: 0');
-    return res.status(isQuota ? 429 : 502).json({ error: message });
+    const lower = message.toLowerCase();
+    const isQuota = lower.includes('quota') || message.includes('limit: 0');
+    const isTraffic = lower.includes('high traffic') || lower.includes('overloaded') || lower.includes('unavailable');
+    const status = isQuota || isTraffic ? 429 : 502;
+    return res.status(status).json({ error: message });
   }
 }
