@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { callGeminiApi } from '../lib/gemini.js';
 import './index.css';
 
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
@@ -11,52 +12,18 @@ const ANALYSIS_PROMPT = `You are a precise AI nutritionist. Analyze the food ima
   "dietary_advice": "string"
 }`;
 
-const GEMINI_MODELS = ['gemini-2.0-flash', 'gemini-1.5-flash'];
-
 function parseNutritionResponse(textOutput) {
   const cleanedJson = textOutput.replace(/```json\n?|\n?```/g, '').trim();
   return JSON.parse(cleanedJson);
 }
 
-async function callGeminiDirect(activeKey, base64Image, prompt) {
-  let lastError = null;
-
-  for (const model of GEMINI_MODELS) {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${activeKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{
-            parts: [
-              { inlineData: { mimeType: 'image/jpeg', data: base64Image } },
-              { text: prompt },
-            ],
-          }],
-          generationConfig: { responseMimeType: 'application/json' },
-        }),
-      }
-    );
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      lastError = data?.error?.message || `HTTP ${response.status}`;
-      if (response.status === 404) continue;
-      throw new Error(lastError);
-    }
-
-    const textOutput = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!textOutput) throw new Error('No response from Gemini API');
-    return parseNutritionResponse(textOutput);
-  }
-
-  throw new Error(lastError || 'Failed to reach Gemini API');
+async function analyzeWithGemini(apiKey, base64Image, prompt) {
+  const text = await callGeminiApi(apiKey, base64Image, prompt);
+  return parseNutritionResponse(text);
 }
 
 async function callGeminiProxy(base64Image, prompt) {
-  const response = await fetch(`${import.meta.env.BASE_URL}api/analyze`, {
+  const response = await fetch('/api/analyze', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ base64Image, prompt }),
@@ -65,11 +32,18 @@ async function callGeminiProxy(base64Image, prompt) {
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    throw new Error(data.error || `Server error (${response.status})`);
+    const err = new Error(data.error || `Server error (${response.status})`);
+    err.status = response.status;
+    throw err;
   }
 
   if (!data.text) throw new Error('No response from server');
   return parseNutritionResponse(data.text);
+}
+
+function isQuotaError(message = '') {
+  const msg = message.toLowerCase();
+  return msg.includes('quota') || msg.includes('limit: 0') || msg.includes('429');
 }
 
 export default function App() {
@@ -178,12 +152,15 @@ export default function App() {
         try {
           result = await callGeminiProxy(base64Image, ANALYSIS_PROMPT);
         } catch (proxyErr) {
-          if (!activeKey) throw proxyErr;
-          console.warn('Proxy failed, falling back to client API:', proxyErr.message);
-          result = await callGeminiDirect(activeKey, base64Image, ANALYSIS_PROMPT);
+          // Only fall back to client API for server/config errors, not quota limits
+          if (!activeKey || isQuotaError(proxyErr.message) || proxyErr.status === 429) {
+            throw proxyErr;
+          }
+          console.warn('Proxy unavailable, using client API:', proxyErr.message);
+          result = await analyzeWithGemini(activeKey, base64Image, ANALYSIS_PROMPT);
         }
       } else if (activeKey) {
-        result = await callGeminiDirect(activeKey, base64Image, ANALYSIS_PROMPT);
+        result = await analyzeWithGemini(activeKey, base64Image, ANALYSIS_PROMPT);
       } else {
         alert('API Key missing! Click the settings gear at the top right to paste your Gemini API Key.\n\nGet a free key at: https://aistudio.google.com/apikey');
         return;
@@ -193,7 +170,17 @@ export default function App() {
     } catch (err) {
       console.error('API error:', err);
       const message = err.message || 'Unknown error';
-      if (message.includes('API key') || message.includes('403') || message.includes('401')) {
+      if (isQuotaError(message)) {
+        alert(
+          'Gemini API quota exceeded.\n\n' +
+          'Try these fixes:\n' +
+          '1. Wait 1–2 minutes and try again\n' +
+          '2. Create a new API key at https://aistudio.google.com/apikey\n' +
+          '3. Link billing in Google AI Studio (free tier still works)\n' +
+          '4. Paste a different key in Settings (gear icon)\n\n' +
+          `Details: ${message.slice(0, 200)}`
+        );
+      } else if (message.includes('API key') || message.includes('403') || message.includes('401')) {
         alert(`Invalid or missing API key.\n\nOpen Settings (gear icon) and paste a valid Gemini key from https://aistudio.google.com/apikey\n\nDetails: ${message}`);
       } else {
         alert(`Error analyzing image: ${message}`);

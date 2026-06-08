@@ -1,3 +1,5 @@
+import { callGeminiApi } from '../lib/gemini.js';
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -14,7 +16,7 @@ export default async function handler(req, res) {
   const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
   if (!apiKey) {
     return res.status(500).json({
-      error: 'Server API key not configured. Set GEMINI_API_KEY in your deployment environment.',
+      error: 'Server API key not configured. Set GEMINI_API_KEY in Vercel environment variables.',
     });
   }
 
@@ -23,46 +25,12 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Missing base64Image or prompt' });
   }
 
-  const models = ['gemini-2.0-flash', 'gemini-1.5-flash'];
-  let lastError = null;
-
-  for (const model of models) {
-    try {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{
-              parts: [
-                { inlineData: { mimeType: 'image/jpeg', data: base64Image } },
-                { text: prompt },
-              ],
-            }],
-            generationConfig: { responseMimeType: 'application/json' },
-          }),
-        }
-      );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        lastError = data?.error?.message || `HTTP ${response.status}`;
-        if (response.status === 404) continue;
-        return res.status(response.status).json({ error: lastError });
-      }
-
-      const textOutput = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!textOutput) {
-        return res.status(502).json({ error: 'No response from Gemini API' });
-      }
-
-      return res.status(200).json({ text: textOutput });
-    } catch (err) {
-      lastError = err.message;
-    }
+  try {
+    const text = await callGeminiApi(apiKey, base64Image, prompt);
+    return res.status(200).json({ text });
+  } catch (err) {
+    const message = err.message || 'Failed to reach Gemini API';
+    const isQuota = message.toLowerCase().includes('quota') || message.includes('limit: 0');
+    return res.status(isQuota ? 429 : 502).json({ error: message });
   }
-
-  return res.status(502).json({ error: lastError || 'Failed to reach Gemini API' });
 }
