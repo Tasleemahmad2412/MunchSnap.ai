@@ -1,0 +1,434 @@
+import React, { useState, useRef, useEffect } from 'react';
+import './index.css';
+
+const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
+const ANALYSIS_PROMPT = `You are a precise AI nutritionist. Analyze the food image provided and return ONLY valid JSON (no markdown, no prose):
+{
+  "meal_name": "string",
+  "total_calories": number,
+  "macros": { "protein_g": number, "carbs_g": number, "fats_g": number },
+  "items_detected": [{ "name": "string", "emoji": "string", "estimated_weight_g": number, "calories": number }],
+  "dietary_advice": "string"
+}`;
+
+const GEMINI_MODELS = ['gemini-2.0-flash', 'gemini-1.5-flash'];
+
+function parseNutritionResponse(textOutput) {
+  const cleanedJson = textOutput.replace(/```json\n?|\n?```/g, '').trim();
+  return JSON.parse(cleanedJson);
+}
+
+async function callGeminiDirect(activeKey, base64Image, prompt) {
+  let lastError = null;
+
+  for (const model of GEMINI_MODELS) {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${activeKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              { inlineData: { mimeType: 'image/jpeg', data: base64Image } },
+              { text: prompt },
+            ],
+          }],
+          generationConfig: { responseMimeType: 'application/json' },
+        }),
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      lastError = data?.error?.message || `HTTP ${response.status}`;
+      if (response.status === 404) continue;
+      throw new Error(lastError);
+    }
+
+    const textOutput = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!textOutput) throw new Error('No response from Gemini API');
+    return parseNutritionResponse(textOutput);
+  }
+
+  throw new Error(lastError || 'Failed to reach Gemini API');
+}
+
+async function callGeminiProxy(base64Image, prompt) {
+  const response = await fetch(`${import.meta.env.BASE_URL}api/analyze`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ base64Image, prompt }),
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new Error(data.error || `Server error (${response.status})`);
+  }
+
+  if (!data.text) throw new Error('No response from server');
+  return parseNutritionResponse(data.text);
+}
+
+export default function App() {
+  const [stream, setStream] = useState(null);
+  const [cameraOn, setCameraOn] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [nutrition, setNutrition] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null);
+  const [showBars, setShowBars] = useState(false);
+  const [customApiKey, setCustomApiKey] = useState(() => {
+    try { return localStorage.getItem('user_gemini_api_key') || ''; }
+    catch { return ''; }
+  });
+  const [showSettings, setShowSettings] = useState(false);
+
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    if (nutrition) {
+      setShowBars(false);
+      const timer = setTimeout(() => setShowBars(true), 100);
+      return () => clearTimeout(timer);
+    }
+  }, [nutrition]);
+
+  useEffect(() => {
+    return () => {
+      if (stream) stream.getTracks().forEach(track => track.stop());
+    };
+  }, [stream]);
+
+  useEffect(() => {
+    if (videoRef.current && stream) {
+      videoRef.current.srcObject = stream;
+    }
+  }, [stream]);
+
+  const toggleCamera = async () => {
+    if (cameraOn) {
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+        setStream(null);
+      }
+      setCameraOn(false);
+      setImagePreview(null);
+    } else {
+      try {
+        const mediaStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment' }
+        });
+        setStream(mediaStream);
+        setCameraOn(true);
+        setImagePreview(null);
+        setNutrition(null);
+      } catch (err) {
+        console.error('Camera error:', err);
+        alert('Camera access denied. Please allow camera access or use the upload button.');
+      }
+    }
+  };
+
+  const handleFileUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (stream) {
+      stream.getTracks().forEach(track => track.stop());
+      setStream(null);
+      setCameraOn(false);
+    }
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setImagePreview(event.target.result);
+      setNutrition(null);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const captureImage = () => {
+    if (imagePreview) return imagePreview.split(',')[1];
+    if (videoRef.current && canvasRef.current) {
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL('image/jpeg').split(',')[1];
+    }
+    return null;
+  };
+
+  const analyzeImage = async () => {
+    const activeKey = customApiKey || GEMINI_API_KEY;
+    const base64Image = captureImage();
+    if (!base64Image) return;
+
+    setLoading(true);
+    setNutrition(null);
+
+    try {
+      let result;
+
+      if (!import.meta.env.DEV) {
+        try {
+          result = await callGeminiProxy(base64Image, ANALYSIS_PROMPT);
+        } catch (proxyErr) {
+          if (!activeKey) throw proxyErr;
+          console.warn('Proxy failed, falling back to client API:', proxyErr.message);
+          result = await callGeminiDirect(activeKey, base64Image, ANALYSIS_PROMPT);
+        }
+      } else if (activeKey) {
+        result = await callGeminiDirect(activeKey, base64Image, ANALYSIS_PROMPT);
+      } else {
+        alert('API Key missing! Click the settings gear at the top right to paste your Gemini API Key.\n\nGet a free key at: https://aistudio.google.com/apikey');
+        return;
+      }
+
+      setNutrition(result);
+    } catch (err) {
+      console.error('API error:', err);
+      const message = err.message || 'Unknown error';
+      if (message.includes('API key') || message.includes('403') || message.includes('401')) {
+        alert(`Invalid or missing API key.\n\nOpen Settings (gear icon) and paste a valid Gemini key from https://aistudio.google.com/apikey\n\nDetails: ${message}`);
+      } else {
+        alert(`Error analyzing image: ${message}`);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const saveApiKey = (value) => {
+    setCustomApiKey(value);
+    try { localStorage.setItem('user_gemini_api_key', value); }
+    catch { /* private browsing — skip */ }
+  };
+
+  const clearApiKey = () => {
+    setCustomApiKey('');
+    try { localStorage.removeItem('user_gemini_api_key'); }
+    catch { /* private browsing — skip */ }
+  };
+
+  const canAnalyze = cameraOn || imagePreview;
+
+  const calculateMacroPercent = (macroVal, allMacros) => {
+    const total = allMacros.protein_g + allMacros.carbs_g + allMacros.fats_g;
+    if (total === 0) return 0;
+    return Math.round((macroVal / total) * 100);
+  };
+
+  return (
+    <>
+      <div className="floating-background">
+        <div className="glow-blob glow-1"></div>
+        <div className="glow-blob glow-2"></div>
+        <div className="glow-blob glow-3"></div>
+        {/* Fixed icon names — only valid Tabler outline icons */}
+        <i className="ti ti-cherry floating-item item-1" aria-hidden="true"></i>
+        <i className="ti ti-plant floating-item item-2" aria-hidden="true"></i>
+        <i className="ti ti-barbell floating-item item-3" aria-hidden="true"></i>
+        <i className="ti ti-activity floating-item item-4" aria-hidden="true"></i>
+        <i className="ti ti-salad floating-item item-5" aria-hidden="true"></i>
+        <i className="ti ti-run floating-item item-6" aria-hidden="true"></i>
+      </div>
+
+      <div className="app-wrapper">
+        <h2 className="sr-only">NutriSnap — AI-powered calorie and macro tracker. Point your camera at a meal to analyze its nutrition.</h2>
+
+        <div className="header">
+          <div className="header-icon">
+            <i className="ti ti-salad" aria-hidden="true"></i>
+          </div>
+          <div className="header-text">
+            <h1>NutriSnap</h1>
+            <p>Analyze your meal with AI</p>
+          </div>
+          <button
+            className="btn-settings"
+            onClick={() => setShowSettings(!showSettings)}
+            aria-label="Toggle API settings"
+          >
+            <i className="ti ti-settings" aria-hidden="true"></i>
+          </button>
+        </div>
+
+        {showSettings && (
+          <div className="card settings-card">
+            <div className="settings-header">
+              <h3>Gemini API Settings</h3>
+              <button
+                className="btn-close-settings"
+                onClick={() => setShowSettings(false)}
+                aria-label="Close settings"
+              >
+                <i className="ti ti-x" aria-hidden="true"></i>
+              </button>
+            </div>
+            <p className="settings-description">
+              Provide your own Gemini API key if the default key is rate-limited.
+            </p>
+            <div className="settings-input-group">
+              <input
+                type="password"
+                placeholder="AIzaSy..."
+                value={customApiKey}
+                onChange={(e) => saveApiKey(e.target.value)}
+              />
+              {customApiKey && (
+                <button className="btn-clear-key" onClick={clearApiKey}>
+                  Clear
+                </button>
+              )}
+            </div>
+            <div className="settings-status">
+              {customApiKey ? (
+                <span className="status-badge status-custom">Using custom key</span>
+              ) : GEMINI_API_KEY ? (
+                <span className="status-badge status-env">Using environment key</span>
+              ) : (
+                <span className="status-badge status-fallback">No key set — enter one above</span>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div className="viewfinder">
+          <div className="viewfinder-bracket bracket-tl"></div>
+          <div className="viewfinder-bracket bracket-tr"></div>
+          <div className="viewfinder-bracket bracket-bl"></div>
+          <div className="viewfinder-bracket bracket-br"></div>
+
+          {cameraOn && !imagePreview && (
+            <video ref={videoRef} autoPlay playsInline muted></video>
+          )}
+
+          {imagePreview && (
+            <img src={imagePreview} alt="Meal preview" />
+          )}
+
+          {!cameraOn && !imagePreview && (
+            <div className="viewfinder-idle">
+              <i className="ti ti-camera" aria-hidden="true"></i>
+              <p>Point your camera at a meal to analyze calories and macros</p>
+            </div>
+          )}
+
+          {loading && (
+            <div className="scanline-overlay">
+              <div className="loader-fruits">
+                <span className="loader-fruit" aria-hidden="true">🥑</span>
+                <span className="loader-fruit" aria-hidden="true">🍓</span>
+                <span className="loader-fruit" aria-hidden="true">🍌</span>
+              </div>
+              <span className="scanline-text">Analyzing your meal...</span>
+            </div>
+          )}
+
+          <canvas ref={canvasRef} style={{ display: 'none' }}></canvas>
+        </div>
+
+        <div className="action-bar">
+          <button
+            onClick={toggleCamera}
+            aria-label={cameraOn ? 'Turn camera off' : 'Turn camera on'}
+          >
+            <i className={`ti ${cameraOn ? 'ti-camera-off' : 'ti-camera'}`} aria-hidden="true"></i>
+            {cameraOn ? 'Off' : 'Camera'}
+          </button>
+
+          <button
+            className="btn-analyze"
+            onClick={analyzeImage}
+            disabled={!canAnalyze || loading}
+            aria-label="Analyze meal"
+          >
+            <i className="ti ti-analyze" aria-hidden="true"></i>
+            {loading ? 'Analyzing...' : 'Analyze'}
+          </button>
+
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            aria-label="Upload image from device"
+          >
+            <i className="ti ti-upload" aria-hidden="true"></i>
+            Upload
+          </button>
+
+          <input
+            type="file"
+            ref={fileInputRef}
+            style={{ display: 'none' }}
+            accept="image/*"
+            onChange={handleFileUpload}
+          />
+        </div>
+
+        {nutrition && (
+          <div className="results-area">
+            <div className="card meal-header-card">
+              <div>
+                <div className="meal-name">{nutrition.meal_name}</div>
+                <div className="muted-label">Estimated total</div>
+              </div>
+              <div>
+                <div className="calories-value">{nutrition.total_calories}</div>
+                <div className="muted-label" style={{ textAlign: 'right' }}>kcal</div>
+              </div>
+            </div>
+
+            <div className="macros-row">
+              {[
+                { key: 'protein_g', label: 'Protein', icon: 'ti-egg-fried', cls: 'protein' },
+                { key: 'carbs_g',   label: 'Carbs',   icon: 'ti-bread',     cls: 'carbs'   },
+                { key: 'fats_g',    label: 'Fats',    icon: 'ti-droplet',   cls: 'fats'    },
+              ].map(({ key, label, icon, cls }) => (
+                <div className="macro-card" key={key}>
+                  <div className="macro-header">
+                    <i className={`ti ${icon} ${cls}-icon`} aria-hidden="true"></i>
+                    <span>{label}</span>
+                  </div>
+                  <div className="macro-value">{nutrition.macros[key]}g</div>
+                  <div className="progress-track">
+                    <div
+                      className={`progress-bar ${cls}-bar`}
+                      style={{
+                        width: showBars
+                          ? `${calculateMacroPercent(nutrition.macros[key], nutrition.macros)}%`
+                          : '0%'
+                      }}
+                    ></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="card items-card">
+              <div className="items-header">Detected items</div>
+              {nutrition.items_detected.map((item, idx) => (
+                <div key={idx} className="item-row">
+                  <div className="item-emoji">{item.emoji}</div>
+                  <div className="item-details">
+                    <div className="item-name">{item.name}</div>
+                    <div className="muted-label">{item.estimated_weight_g}g</div>
+                  </div>
+                  <div className="item-calories">{item.calories} kcal</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="card advice-card">
+              <i className="ti ti-bulb advice-icon" aria-hidden="true"></i>
+              <div className="advice-text">{nutrition.dietary_advice}</div>
+            </div>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
