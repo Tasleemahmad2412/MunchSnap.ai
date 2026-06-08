@@ -1,21 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { callGeminiApi } from '../lib/gemini.js';
+import { ANALYSIS_PROMPT, normalizeNutritionResult } from '../lib/nutrition.js';
 import './index.css';
 
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
-const ANALYSIS_PROMPT = `You are a precise AI nutritionist. Analyze the food image provided and return ONLY valid JSON (no markdown, no prose):
-{
-  "meal_name": "string",
-  "meal_description": "A detailed 2-4 sentence description of the meal, ingredients, cooking style, and overall nutritional character",
-  "total_calories": number,
-  "macros": { "protein_g": number, "carbs_g": number, "fats_g": number },
-  "items_detected": [{ "name": "string", "emoji": "string", "estimated_weight_g": number, "calories": number }],
-  "dietary_advice": "string with practical dietary tips for this meal"
-}`;
 
 function parseNutritionResponse(textOutput) {
   const cleanedJson = textOutput.replace(/```json\n?|\n?```/g, '').trim();
-  return JSON.parse(cleanedJson);
+  return normalizeNutritionResult(JSON.parse(cleanedJson));
 }
 
 async function analyzeWithGemini(apiKey, base64Image, prompt) {
