@@ -6,10 +6,11 @@ const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 const ANALYSIS_PROMPT = `You are a precise AI nutritionist. Analyze the food image provided and return ONLY valid JSON (no markdown, no prose):
 {
   "meal_name": "string",
+  "meal_description": "A detailed 2-4 sentence description of the meal, ingredients, cooking style, and overall nutritional character",
   "total_calories": number,
   "macros": { "protein_g": number, "carbs_g": number, "fats_g": number },
   "items_detected": [{ "name": "string", "emoji": "string", "estimated_weight_g": number, "calories": number }],
-  "dietary_advice": "string"
+  "dietary_advice": "string with practical dietary tips for this meal"
 }`;
 
 function parseNutritionResponse(textOutput) {
@@ -62,11 +63,13 @@ export default function App() {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const fileInputRef = useRef(null);
+  const resultsRef = useRef(null);
 
   useEffect(() => {
     if (nutrition) {
       setShowBars(false);
       const timer = setTimeout(() => setShowBars(true), 100);
+      resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       return () => clearTimeout(timer);
     }
   }, [nutrition]);
@@ -356,65 +359,103 @@ export default function App() {
           />
         </div>
 
-        {nutrition && (
-          <div className="results-area">
-            <div className="card meal-header-card">
-              <div>
-                <div className="meal-name">{nutrition.meal_name}</div>
-                <div className="muted-label">Estimated total</div>
+        <div className="results-panel" ref={resultsRef}>
+          {loading && (
+            <div className="card analysis-loading-card">
+              <div className="analysis-loading-header">
+                <i className="ti ti-loader-2 analysis-spinner" aria-hidden="true"></i>
+                <span>Analyzing your meal...</span>
               </div>
-              <div>
-                <div className="calories-value">{nutrition.total_calories}</div>
-                <div className="muted-label" style={{ textAlign: 'right' }}>kcal</div>
-              </div>
+              <p className="analysis-loading-text">Gemini AI is identifying ingredients and calculating nutrition.</p>
             </div>
+          )}
 
-            <div className="macros-row">
-              {[
-                { key: 'protein_g', label: 'Protein', icon: 'ti-egg-fried', cls: 'protein' },
-                { key: 'carbs_g',   label: 'Carbs',   icon: 'ti-bread',     cls: 'carbs'   },
-                { key: 'fats_g',    label: 'Fats',    icon: 'ti-droplet',   cls: 'fats'    },
-              ].map(({ key, label, icon, cls }) => (
-                <div className="macro-card" key={key}>
-                  <div className="macro-header">
-                    <i className={`ti ${icon} ${cls}-icon`} aria-hidden="true"></i>
-                    <span>{label}</span>
+          {nutrition && (
+            <div className="results-area">
+              <div className="results-section-label">Analysis Results</div>
+
+              <div className="card meal-header-card">
+                <div>
+                  <div className="meal-name">{nutrition.meal_name}</div>
+                  <div className="muted-label">Estimated total</div>
+                </div>
+                <div>
+                  <div className="calories-value">{nutrition.total_calories}</div>
+                  <div className="muted-label" style={{ textAlign: 'right' }}>kcal</div>
+                </div>
+              </div>
+
+              {nutrition.meal_description && (
+                <div className="card analysis-description-card">
+                  <div className="analysis-description-header">
+                    <i className="ti ti-file-description" aria-hidden="true"></i>
+                    <span>Meal Description</span>
                   </div>
-                  <div className="macro-value">{nutrition.macros[key]}g</div>
-                  <div className="progress-track">
-                    <div
-                      className={`progress-bar ${cls}-bar`}
-                      style={{
-                        width: showBars
-                          ? `${calculateMacroPercent(nutrition.macros[key], nutrition.macros)}%`
-                          : '0%'
-                      }}
-                    ></div>
+                  <p className="analysis-description-text">{nutrition.meal_description}</p>
+                </div>
+              )}
+
+              <div className="macros-row">
+                {[
+                  { key: 'protein_g', label: 'Protein', icon: 'ti-egg-fried', cls: 'protein' },
+                  { key: 'carbs_g',   label: 'Carbs',   icon: 'ti-bread',     cls: 'carbs'   },
+                  { key: 'fats_g',    label: 'Fats',    icon: 'ti-droplet',   cls: 'fats'    },
+                ].map(({ key, label, icon, cls }) => (
+                  <div className="macro-card" key={key}>
+                    <div className="macro-header">
+                      <i className={`ti ${icon} ${cls}-icon`} aria-hidden="true"></i>
+                      <span>{label}</span>
+                    </div>
+                    <div className="macro-value">{nutrition.macros?.[key] ?? 0}g</div>
+                    <div className="progress-track">
+                      <div
+                        className={`progress-bar ${cls}-bar`}
+                        style={{
+                          width: showBars && nutrition.macros
+                            ? `${calculateMacroPercent(nutrition.macros[key], nutrition.macros)}%`
+                            : '0%'
+                        }}
+                      ></div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {nutrition.items_detected?.length > 0 && (
+                <div className="card items-card">
+                  <div className="items-header">Detected items</div>
+                  {nutrition.items_detected.map((item, idx) => (
+                    <div key={idx} className="item-row">
+                      <div className="item-emoji">{item.emoji}</div>
+                      <div className="item-details">
+                        <div className="item-name">{item.name}</div>
+                        <div className="muted-label">{item.estimated_weight_g}g</div>
+                      </div>
+                      <div className="item-calories">{item.calories} kcal</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {nutrition.dietary_advice && (
+                <div className="card advice-card">
+                  <i className="ti ti-bulb advice-icon" aria-hidden="true"></i>
+                  <div>
+                    <div className="advice-label">Dietary Advice</div>
+                    <div className="advice-text">{nutrition.dietary_advice}</div>
                   </div>
                 </div>
-              ))}
+              )}
             </div>
+          )}
 
-            <div className="card items-card">
-              <div className="items-header">Detected items</div>
-              {nutrition.items_detected.map((item, idx) => (
-                <div key={idx} className="item-row">
-                  <div className="item-emoji">{item.emoji}</div>
-                  <div className="item-details">
-                    <div className="item-name">{item.name}</div>
-                    <div className="muted-label">{item.estimated_weight_g}g</div>
-                  </div>
-                  <div className="item-calories">{item.calories} kcal</div>
-                </div>
-              ))}
+          {!loading && !nutrition && (cameraOn || imagePreview) && (
+            <div className="results-placeholder">
+              <i className="ti ti-sparkles" aria-hidden="true"></i>
+              <p>Tap <strong>Analyze</strong> to see calories, macros, and a full meal breakdown below.</p>
             </div>
-
-            <div className="card advice-card">
-              <i className="ti ti-bulb advice-icon" aria-hidden="true"></i>
-              <div className="advice-text">{nutrition.dietary_advice}</div>
-            </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </>
   );

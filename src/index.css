@@ -42,15 +42,15 @@ body {
     linear-gradient(135deg, #060908 0%, #0a0f0d 50%, #040505 100%);
   background-attachment: fixed;
   color: var(--color-text-primary);
-  display: flex;
-  justify-content: center;
-  padding: 20px 0;
   min-height: 100vh;
   margin: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 #root {
   width: 100%;
+  padding: 20px 0 48px;
 }
 
 /* ─── Screen-reader only utility ─── */
@@ -74,7 +74,7 @@ body {
   flex-direction: column;
   gap: 20px;
   font-family: var(--font-sans);
-  padding: 0 16px;
+  padding: 0 16px 24px;
 }
 
 /* ─── Typography ─── */
@@ -448,6 +448,119 @@ button.btn-analyze:not(:disabled) {
 .status-env      { background: rgba(59, 130, 246, 0.15);  color: #60a5fa;  border: 1px solid rgba(59, 130, 246, 0.2); }
 .status-fallback { background: rgba(245, 158, 11, 0.15);  color: #fbbf24;  border: 1px solid rgba(245, 158, 11, 0.2); }
 
+/* ─── Results panel (below viewfinder & buttons) ─── */
+.results-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  scroll-margin-top: 16px;
+}
+
+.results-section-label {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-tertiary);
+  padding-left: 4px;
+}
+
+.results-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 28px 20px;
+  text-align: center;
+  color: var(--color-text-secondary);
+  border: 1px dashed rgba(16, 185, 129, 0.25);
+  border-radius: var(--border-radius-lg);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.results-placeholder i {
+  font-size: 28px;
+  color: var(--color-text-tertiary);
+  opacity: 0.7;
+}
+
+.results-placeholder p {
+  font-size: 13px;
+  line-height: 1.5;
+  max-width: 260px;
+}
+
+.results-placeholder strong {
+  color: var(--color-text-success);
+}
+
+.analysis-loading-card {
+  border-left: 4px solid var(--color-text-tertiary);
+  animation: fadeUp 0.4s ease forwards;
+}
+
+.analysis-loading-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.analysis-loading-text {
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+}
+
+.analysis-spinner {
+  font-size: 20px;
+  color: var(--color-text-success);
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.analysis-description-card {
+  border-left: 4px solid var(--color-text-tertiary);
+}
+
+.analysis-description-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: 10px;
+}
+
+.analysis-description-header i {
+  font-size: 18px;
+  color: var(--color-text-success);
+}
+
+.analysis-description-text {
+  font-size: 14px;
+  line-height: 1.65;
+  color: rgba(255, 255, 255, 0.88);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.advice-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-success);
+  margin-bottom: 6px;
+}
+
 /* ─── Results ─── */
 .results-area {
   display: flex;
@@ -617,8 +730,10 @@ button.btn-analyze:not(:disabled) {
 }
 .advice-text {
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.65;
   color: rgba(255, 255, 255, 0.9);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* ─── Floating background ─── */
